@@ -49,6 +49,9 @@ type Host struct {
 	// Format: uuid
 	ID *strfmt.UUID `json:"id" gorm:"primary_key"`
 
+	// Installer version
+	InstallerVersion string `json:"installer_version,omitempty"`
+
 	// inventory
 	Inventory string `json:"inventory,omitempty" gorm:"type:text"`
 
