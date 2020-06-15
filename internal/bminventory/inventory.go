@@ -393,6 +393,7 @@ func (b *bareMetalInventory) GenerateClusterISO(ctx context.Context, params inst
 	cluster.ImageInfo.ProxyURL = params.ImageCreateParams.ProxyURL
 	cluster.ImageInfo.SSHPublicKey = params.ImageCreateParams.SSHPublicKey
 	cluster.ImageInfo.CreatedAt = strfmt.DateTime(now)
+	cluster.ImageInfo.GeneratorVersion = b.Config.ImageBuilder
 
 	if err := tx.Model(&cluster).Update(cluster).Error; err != nil {
 		log.WithError(err).Errorf("failed to update cluster: %s", params.ClusterID)
@@ -550,7 +551,7 @@ func (c clusterInstaller) install(tx *gorm.DB) error {
 		return err
 	}
 
-	if err = c.b.generateClusterInstallConfig(c.ctx, cluster); err != nil {
+	if err = c.b.generateClusterInstallConfig(c.ctx, cluster, tx); err != nil {
 		return common.NewApiError(http.StatusInternalServerError, err)
 	}
 	return nil
@@ -614,7 +615,7 @@ func (b *bareMetalInventory) setBootstrapHost(ctx context.Context, cluster commo
 	return nil
 }
 
-func (b *bareMetalInventory) generateClusterInstallConfig(ctx context.Context, cluster common.Cluster) error {
+func (b *bareMetalInventory) generateClusterInstallConfig(ctx context.Context, cluster common.Cluster, tx *gorm.DB) error {
 	log := logutil.FromContext(ctx, b.log)
 
 	cfg, err := installcfg.GetInstallConfig(log, &cluster)
@@ -632,7 +633,8 @@ func (b *bareMetalInventory) generateClusterInstallConfig(ctx context.Context, c
 		log.WithError(err).Errorf("Generating kubeconfig files %s failed for cluster %s", jobName, cluster.ID)
 		return errors.Wrapf(err, "Generating kubeconfig files %s failed for cluster %s", jobName, cluster.ID)
 	}
-	return nil
+
+	return b.clusterApi.SetGeneratorVersion(&cluster, b.Config.KubeconfigGenerator, tx)
 }
 
 func (b *bareMetalInventory) refreshClusterHosts(ctx context.Context, cluster *common.Cluster, tx *gorm.DB, log logrus.FieldLogger) middleware.Responder {
