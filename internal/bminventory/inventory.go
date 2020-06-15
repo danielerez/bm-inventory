@@ -1453,3 +1453,36 @@ func setPullSecret(cluster *models.Cluster, pullSecret string) {
 		cluster.PullSecretSet = false
 	}
 }
+
+func (b *bareMetalInventory) CancelInstallation(ctx context.Context, params installer.CancelInstallationParams) middleware.Responder {
+	log := logutil.FromContext(ctx, b.log)
+	log.Infof("canceling installation for cluster %s", params.ClusterID)
+
+	var c models.Cluster
+
+	if err := b.db.Preload("Hosts").First(&c, "id = ?", params.ClusterID).Error; err != nil {
+		log.WithError(err).Errorf("failed to find cluster %s", params.ClusterID)
+		if gorm.IsRecordNotFoundError(err) {
+			return installer.NewCancelInstallationNotFound().WithPayload(common.GenerateError(http.StatusNotFound, err))
+		}
+		return installer.NewCancelInstallationInternalServerError().WithPayload(common.GenerateError(http.StatusInternalServerError, err))
+	}
+
+	// cancellation is made by setting the cluster and and hosts states to error.
+	if err := b.clusterApi.CancelInstallation(ctx, &c, "installation was canceled by user"); err != nil {
+		if gorm.Error(err) {
+			return installer.NewCancelInstallationInternalServerError().WithPayload(common.GenerateError(http.StatusInternalServerError, err))
+		}
+		return installer.NewCancelInstallationConflict().WithPayload(common.GenerateError(http.StatusConflict, err))
+	}
+	for _, h := range c.Hosts {
+		if err := b.hostApi.CancelInstallation(ctx, h, "installation was canceled by user"); err != nil {
+			if gorm.Error(err) {
+				return installer.NewCancelInstallationInternalServerError().WithPayload(common.GenerateError(http.StatusInternalServerError, err))
+			}
+			return installer.NewCancelInstallationConflict().WithPayload(common.GenerateError(http.StatusConflict, err))
+		}
+	}
+
+	return installer.NewCancelInstallationAccepted()
+}

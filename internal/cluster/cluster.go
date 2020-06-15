@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	logutil "github.com/filanov/bm-inventory/pkg/log"
 	"time"
 
 	"github.com/pkg/errors"
@@ -53,6 +54,7 @@ type API interface {
 	UploadIngressCert(c *models.Cluster) (err error)
 	VerifyClusterUpdatability(c *models.Cluster) (err error)
 	AcceptRegistration(c *models.Cluster) (err error)
+	CancelInstallation(ctx context.Context, c *models.Cluster, message string) (err error)
 }
 
 type Manager struct {
@@ -219,5 +221,16 @@ func (m *Manager) VerifyClusterUpdatability(c *models.Cluster) (err error) {
 	if !funk.ContainsString(allowedStatuses, clusterStatus) {
 		err = errors.Errorf("Cluster %s is in %s state, cluster can be updated only in one of %s", c.ID, clusterStatus, allowedStatuses)
 	}
+	return err
+}
+
+func (m *Manager) CancelInstallation(ctx context.Context, c *models.Cluster, reason string) (err error) {
+	clusterStatus := swag.StringValue(c.Status)
+	if clusterStatus == clusterStatusError {
+		return nil
+	} else if clusterStatus != clusterStatusInstalling {
+		return fmt.Errorf("unable to cancel installation of cluster %s in status <%s>", c.ID.String(), clusterStatus)
+	}
+	_, err = updateState(clusterStatusError, reason, c, m.db, logutil.FromContext(ctx, m.log))
 	return err
 }
