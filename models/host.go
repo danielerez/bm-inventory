@@ -37,6 +37,9 @@ type Host struct {
 	// Format: date-time
 	CreatedAt strfmt.DateTime `json:"created_at,omitempty" gorm:"type:datetime"`
 
+	// free addresses
+	FreeAddresses string `json:"free_addresses,omitempty" gorm:"type:text"`
+
 	// hardware info
 	HardwareInfo string `json:"hardware_info,omitempty" gorm:"type:text"`
 
