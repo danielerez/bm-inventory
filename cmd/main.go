@@ -6,6 +6,10 @@ import (
 	"net/http"
 	"time"
 
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
+
 	"github.com/filanov/bm-inventory/internal/bminventory"
 	"github.com/filanov/bm-inventory/internal/cluster"
 	"github.com/filanov/bm-inventory/internal/common"
@@ -21,8 +25,6 @@ import (
 	awsS3Client "github.com/filanov/bm-inventory/pkg/s3Client"
 	"github.com/filanov/bm-inventory/pkg/s3wrapper"
 
-	"github.com/filanov/bm-inventory/pkg/thread"
-	"github.com/filanov/bm-inventory/restapi"
 	"github.com/go-openapi/strfmt"
 	"github.com/go-openapi/swag"
 	"github.com/jinzhu/gorm"
@@ -31,8 +33,9 @@ import (
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
+
+	"github.com/filanov/bm-inventory/pkg/thread"
+	"github.com/filanov/bm-inventory/restapi"
 )
 
 func init() {
@@ -49,6 +52,7 @@ var Options struct {
 	ClusterStateMonitorInterval time.Duration `envconfig:"CLUSTER_MONITOR_INTERVAL" default:"10s"`
 	S3Config                    s3wrapper.Config
 	HostStateMonitorInterval    time.Duration `envconfig:"HOST_MONITOR_INTERVAL" default:"30s"`
+	TestMode                    bool `envconfig:"TEST_MODE" default:"false"` // TODO remove when jobs running deprecated
 }
 
 func main() {
@@ -65,8 +69,12 @@ func main() {
 
 	log.Println("Starting bm service")
 
-	if err = s3wrapper.CreateBucket(&Options.S3Config); err != nil {
-		log.Fatal(err)
+	if Options.TestMode {
+		log.Println("running drone test, skipping S3")
+	}else {
+		if err = s3wrapper.CreateBucket(&Options.S3Config); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	db, err := gorm.Open("mysql",
@@ -76,6 +84,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Fail to connect to DB, ", err)
 	}
+
 	defer db.Close()
 	db.DB().SetMaxIdleConns(0)
 	db.DB().SetMaxOpenConns(0)
@@ -86,8 +95,14 @@ func main() {
 		log.Fatal("Failed to add K8S scheme", err)
 	}
 
-	kclient, err := client.New(config.GetConfigOrDie(), client.Options{Scheme: scheme})
-	if err != nil {
+	var sConfig *rest.Config
+	if Options.TestMode{
+		sConfig = nil
+	}else{
+		sConfig = config.GetConfigOrDie()
+	}
+	kclient, err := client.New(sConfig, client.Options{Scheme: scheme})
+	if err != nil && !Options.TestMode {
 		log.Fatal("failed to create client:", err)
 	}
 
@@ -117,6 +132,9 @@ func main() {
 	}
 
 	jobApi := job.New(log.WithField("pkg", "k8s-job-wrapper"), kclient, Options.JobConfig)
+	if Options.TestMode{
+		jobApi = nil
+	}
 	bm := bminventory.NewBareMetalInventory(db, log.WithField("pkg", "Inventory"), hostApi, clusterApi, Options.BMConfig, jobApi, eventsHandler, s3Client)
 
 	events := events.NewApi(eventsHandler, logrus.WithField("pkg", "eventsApi"))
