@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
@@ -52,7 +51,7 @@ var Options struct {
 	ClusterStateMonitorInterval time.Duration `envconfig:"CLUSTER_MONITOR_INTERVAL" default:"10s"`
 	S3Config                    s3wrapper.Config
 	HostStateMonitorInterval    time.Duration `envconfig:"HOST_MONITOR_INTERVAL" default:"30s"`
-	TestMode                    bool `envconfig:"TEST_MODE" default:"false"` // TODO remove when jobs running deprecated
+	UseK8s                      bool          `envconfig:"USE_K8S" default:"true"` // TODO remove when jobs running deprecated
 }
 
 func main() {
@@ -69,12 +68,25 @@ func main() {
 
 	log.Println("Starting bm service")
 
-	if Options.TestMode {
-		log.Println("running drone test, skipping S3")
-	}else {
+	var kclient client.Client
+	if Options.UseK8s {
 		if err = s3wrapper.CreateBucket(&Options.S3Config); err != nil {
 			log.Fatal(err)
 		}
+
+		scheme := runtime.NewScheme()
+		if err = clientgoscheme.AddToScheme(scheme); err != nil {
+			log.Fatal("Failed to add K8S scheme", err)
+		}
+
+		kclient, err = client.New(config.GetConfigOrDie(), client.Options{Scheme: scheme})
+		if err != nil && Options.UseK8s {
+			log.Fatal("failed to create client:", err)
+		}
+
+	} else {
+		log.Println("running drone test, skipping S3")
+		kclient = nil
 	}
 
 	db, err := gorm.Open("mysql",
@@ -84,27 +96,10 @@ func main() {
 	if err != nil {
 		log.Fatal("Fail to connect to DB, ", err)
 	}
-
 	defer db.Close()
 	db.DB().SetMaxIdleConns(0)
 	db.DB().SetMaxOpenConns(0)
 	db.DB().SetConnMaxLifetime(0)
-
-	scheme := runtime.NewScheme()
-	if err = clientgoscheme.AddToScheme(scheme); err != nil {
-		log.Fatal("Failed to add K8S scheme", err)
-	}
-
-	var sConfig *rest.Config
-	if Options.TestMode{
-		sConfig = nil
-	}else{
-		sConfig = config.GetConfigOrDie()
-	}
-	kclient, err := client.New(sConfig, client.Options{Scheme: scheme})
-	if err != nil && !Options.TestMode {
-		log.Fatal("failed to create client:", err)
-	}
 
 	if err = db.AutoMigrate(&models.Host{}, &common.Cluster{}, &events.Event{}).Error; err != nil {
 		log.Fatal("failed to auto migrate, ", err)
@@ -132,9 +127,6 @@ func main() {
 	}
 
 	jobApi := job.New(log.WithField("pkg", "k8s-job-wrapper"), kclient, Options.JobConfig)
-	if Options.TestMode{
-		jobApi = nil
-	}
 	bm := bminventory.NewBareMetalInventory(db, log.WithField("pkg", "Inventory"), hostApi, clusterApi, Options.BMConfig, jobApi, eventsHandler, s3Client)
 
 	events := events.NewApi(eventsHandler, logrus.WithField("pkg", "eventsApi"))

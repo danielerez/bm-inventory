@@ -74,7 +74,7 @@ type Config struct {
 	AwsAccessKeyID      string `envconfig:"AWS_ACCESS_KEY_ID" default:"accessKey1"`
 	AwsSecretAccessKey  string `envconfig:"AWS_SECRET_ACCESS_KEY" default:"verySecretKey1"`
 	Namespace           string `envconfig:"NAMESPACE" default:"assisted-installer"`
-	TestMode            bool   `envconfig:"TEST_MODE" default:"false"` // TODO remove when jobs running deprecated
+	UseK8s              bool   `envconfig:"USE_K8S" default:"true"` // TODO remove when jobs running deprecated
 }
 
 const ignitionConfigFormat = `{
@@ -140,7 +140,7 @@ func NewBareMetalInventory(
 		b.imageBuildCmd = strings.Split(cfg.ImageBuilderCmd, " ")
 	}
 
-	if !b.Config.TestMode {
+	if b.Config.UseK8s {
 		//Run first ISO dummy for image pull, this is done so that the image will be pulled and the api will take less time.
 		generateDummyISOImage(jobApi, b, log)
 	}
