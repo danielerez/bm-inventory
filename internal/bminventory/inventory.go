@@ -87,7 +87,7 @@ const ignitionConfigFormat = `{
 "units": [{
 "name": "agent.service",
 "enabled": true,
-"contents": "[Service]\nType=simple\nRestart=always\nEnvironment=HTTPS_PROXY={{.ProxyURL}}\nEnvironment=HTTP_PROXY={{.ProxyURL}}\nEnvironment=http_proxy={{.ProxyURL}}\nEnvironment=https_proxy={{.ProxyURL}}\nExecStartPre=docker run --privileged --rm -v /usr/local/bin:/hostbin {{.AgentDockerImg}} cp /usr/bin/agent /hostbin\nExecStart=/usr/local/bin/agent --host {{.InventoryURL}} --port {{.InventoryPort}} --cluster-id {{.clusterId}}\n\n[Install]\nWantedBy=multi-user.target"
+"contents": "[Service]\nType=simple\nRestart=always\nEnvironment=HTTPS_PROXY={{.ProxyURL}}\nEnvironment=HTTP_PROXY={{.ProxyURL}}\nEnvironment=http_proxy={{.ProxyURL}}\nEnvironment=https_proxy={{.ProxyURL}}\nExecStartPre=docker run --privileged --rm -v /usr/local/bin:/hostbin {{.AgentDockerImg}} cp /usr/bin/agent /hostbin\nExecStart=/usr/local/bin/agent --host {{.InventoryURL}} --port {{.InventoryPort}} --cluster-id {{.clusterId}} --agent-version {{.AgentDockerImg}}\n\n[Install]\nWantedBy=multi-user.target"
 }]
 }
 }`
@@ -882,11 +882,12 @@ func (b *bareMetalInventory) RegisterHost(ctx context.Context, params installer.
 
 	url := installer.GetHostURL{ClusterID: params.ClusterID, HostID: *params.NewHostParams.HostID}
 	host = models.Host{
-		ID:          params.NewHostParams.HostID,
-		Href:        swag.String(url.String()),
-		Kind:        swag.String(ResourceKindHost),
-		ClusterID:   params.ClusterID,
-		CheckedInAt: strfmt.DateTime(time.Now()),
+		ID:                    params.NewHostParams.HostID,
+		Href:                  swag.String(url.String()),
+		Kind:                  swag.String(ResourceKindHost),
+		ClusterID:             params.ClusterID,
+		CheckedInAt:           strfmt.DateTime(time.Now()),
+		DiscoveryAgentVersion: params.NewHostParams.DiscoveryAgentVersion,
 	}
 
 	if err := b.hostApi.RegisterHost(ctx, &host); err != nil {
