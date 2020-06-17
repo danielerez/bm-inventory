@@ -1722,6 +1722,9 @@ func init() {
           "format": "date-time",
           "x-go-custom-tag": "gorm:\"type:datetime\""
         },
+        "discovery_agent_version": {
+          "type": "string"
+        },
         "hardware_info": {
           "type": "string",
           "x-go-custom-tag": "gorm:\"type:text\""
@@ -1796,6 +1799,9 @@ func init() {
         "host_id"
       ],
       "properties": {
+        "discovery_agent_version": {
+          "type": "string"
+        },
         "host_id": {
           "type": "string",
           "format": "uuid"
@@ -3871,6 +3877,9 @@ func init() {
           "format": "date-time",
           "x-go-custom-tag": "gorm:\"type:datetime\""
         },
+        "discovery_agent_version": {
+          "type": "string"
+        },
         "hardware_info": {
           "type": "string",
           "x-go-custom-tag": "gorm:\"type:text\""
@@ -3945,6 +3954,9 @@ func init() {
         "host_id"
       ],
       "properties": {
+        "discovery_agent_version": {
+          "type": "string"
+        },
         "host_id": {
           "type": "string",
           "format": "uuid"
