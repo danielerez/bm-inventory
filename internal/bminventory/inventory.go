@@ -14,6 +14,8 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/danielerez/go-dns-client/pkg/dnsproviders"
+
 	"github.com/filanov/bm-inventory/internal/cluster/validations"
 
 	"github.com/filanov/bm-inventory/restapi"
@@ -63,17 +65,18 @@ var (
 )
 
 type Config struct {
-	ImageBuilder        string `envconfig:"IMAGE_BUILDER" default:"quay.io/ocpmetal/installer-image-build:stable"` // TODO: update the latest once the repository has git workflow
-	ImageBuilderCmd     string `envconfig:"IMAGE_BUILDER_CMD" default:"echo hello"`
-	AgentDockerImg      string `envconfig:"AGENT_DOCKER_IMAGE" default:"quay.io/ocpmetal/agent:latest"`
-	KubeconfigGenerator string `envconfig:"KUBECONFIG_GENERATE_IMAGE" default:"quay.io/ocpmetal/ignition-manifests-and-kubeconfig-generate:stable"` // TODO: update the latest once the repository has git workflow
-	InventoryURL        string `envconfig:"INVENTORY_URL" default:"10.35.59.36"`
-	InventoryPort       string `envconfig:"INVENTORY_PORT" default:"30485"`
-	S3EndpointURL       string `envconfig:"S3_ENDPOINT_URL" default:"http://10.35.59.36:30925"`
-	S3Bucket            string `envconfig:"S3_BUCKET" default:"test"`
-	AwsAccessKeyID      string `envconfig:"AWS_ACCESS_KEY_ID" default:"accessKey1"`
-	AwsSecretAccessKey  string `envconfig:"AWS_SECRET_ACCESS_KEY" default:"verySecretKey1"`
-	Namespace           string `envconfig:"NAMESPACE" default:"assisted-installer"`
+	ImageBuilder        string            `envconfig:"IMAGE_BUILDER" default:"quay.io/ocpmetal/installer-image-build:stable"` // TODO: update the latest once the repository has git workflow
+	ImageBuilderCmd     string            `envconfig:"IMAGE_BUILDER_CMD" default:"echo hello"`
+	AgentDockerImg      string            `envconfig:"AGENT_DOCKER_IMAGE" default:"quay.io/ocpmetal/agent:latest"`
+	KubeconfigGenerator string            `envconfig:"KUBECONFIG_GENERATE_IMAGE" default:"quay.io/ocpmetal/ignition-manifests-and-kubeconfig-generate:stable"` // TODO: update the latest once the repository has git workflow
+	InventoryURL        string            `envconfig:"INVENTORY_URL" default:"10.35.59.36"`
+	InventoryPort       string            `envconfig:"INVENTORY_PORT" default:"30485"`
+	S3EndpointURL       string            `envconfig:"S3_ENDPOINT_URL" default:"http://10.35.59.36:30925"`
+	S3Bucket            string            `envconfig:"S3_BUCKET" default:"test"`
+	AwsAccessKeyID      string            `envconfig:"AWS_ACCESS_KEY_ID" default:"accessKey1"`
+	AwsSecretAccessKey  string            `envconfig:"AWS_SECRET_ACCESS_KEY" default:"verySecretKey1"`
+	Namespace           string            `envconfig:"NAMESPACE" default:"assisted-installer"`
+	BaseDNSDomains      map[string]string `envconfig:"BASE_DNS_DOMAINS" default:""`
 }
 
 const ignitionConfigFormat = `{
@@ -305,7 +308,12 @@ func (b *bareMetalInventory) DeregisterCluster(ctx context.Context, params insta
 			WithPayload(common.GenerateError(http.StatusNotFound, err))
 	}
 
-	err := b.clusterApi.DeregisterCluster(ctx, &cluster)
+	err := b.deleteDNSRecordSets(ctx, cluster)
+	if err != nil {
+		log.Warnf("failed to delete DNS record sets for base domain: %s", cluster.BaseDNSDomain)
+	}
+
+	err = b.clusterApi.DeregisterCluster(ctx, &cluster)
 	if err != nil {
 		log.WithError(err).Errorf("failed to deregister cluster cluster %s", params.ClusterID)
 		return installer.NewDeregisterClusterNotFound().
@@ -578,6 +586,13 @@ func (b *bareMetalInventory) InstallCluster(ctx context.Context, params installe
 	}
 	if err = cInstaller.validateHostsInventory(&cluster); err != nil {
 		return common.GenerateErrorResponder(err)
+	}
+
+	err = b.createDNSRecordSets(ctx, cluster)
+	if err != nil {
+		log.Errorf("failed to create DNS record sets for base domain: %s", cluster.BaseDNSDomain)
+		return installer.NewRegisterClusterInternalServerError().
+			WithPayload(common.GenerateError(http.StatusInternalServerError, err))
 	}
 
 	err = b.db.Transaction(cInstaller.install)
@@ -1454,4 +1469,80 @@ func setPullSecret(cluster *common.Cluster, pullSecret string) {
 	} else {
 		cluster.PullSecretSet = false
 	}
+}
+
+func (b *bareMetalInventory) createDNSRecordSets(ctx context.Context, cluster common.Cluster) error {
+	return b.updateDNSRecordSets(ctx, cluster, false)
+}
+
+func (b *bareMetalInventory) deleteDNSRecordSets(ctx context.Context, cluster common.Cluster) error {
+	return b.updateDNSRecordSets(ctx, cluster, true)
+}
+
+func (b *bareMetalInventory) updateDNSRecordSets(ctx context.Context, cluster common.Cluster, delete bool) error {
+	log := logutil.FromContext(ctx, b.log)
+
+	dnsDomainID, dnsProviderType, err := b.getDNSDomain(cluster.BaseDNSDomain)
+	if err != nil {
+		return err
+	}
+	if dnsDomainID == "" || dnsProviderType == "" {
+		// No default base domains
+		return nil
+	}
+
+	switch dnsProviderType {
+	case "route53":
+		var dnsProvider dnsproviders.Provider = dnsproviders.Route53{
+			RecordSet: dnsproviders.RecordSet{
+				HostedZoneID:  dnsDomainID,
+				RecordSetType: "A",
+				TTL:           60,
+			},
+		}
+
+		dnsRecordSetFunc := dnsProvider.UpdateRecordSet
+		if delete {
+			dnsRecordSetFunc = dnsProvider.DeleteRecordSet
+		}
+
+		// Update/Delete A record for API Virtual IP
+		recordSetName := fmt.Sprintf("%s.%s.%s", "api", cluster.Name, cluster.BaseDNSDomain)
+		recordSetValue := cluster.APIVip
+		_, err := dnsRecordSetFunc(recordSetName, recordSetValue)
+		if err != nil {
+			log.WithError(err).Errorf("failed to update DNS record: (%s, %s)", recordSetName, recordSetValue)
+			return err
+		}
+		// Update/Delete A record for Ingress Virtual IP
+		recordSetName = fmt.Sprintf("*.%s.%s.%s", "apps", cluster.Name, cluster.BaseDNSDomain)
+		recordSetValue = cluster.IngressVip
+		_, err = dnsRecordSetFunc(recordSetName, recordSetValue)
+		if err != nil {
+			log.WithError(err).Errorf("failed to update DNS record: (%s, %s)", recordSetName, recordSetValue)
+			return err
+		}
+		log.Infof("Successfully created DNS records for base domain: %s", cluster.BaseDNSDomain)
+	}
+	return nil
+}
+
+func (b *bareMetalInventory) getDNSDomain(baseDNSDomain string) (string, string, error) {
+	var dnsDomainID string
+	var dnsProviderType string
+
+	// Parse base domains from config
+	if val, ok := b.Config.BaseDNSDomains[baseDNSDomain]; ok {
+		s := strings.Split(val, "/")
+		if len(s) < 2 {
+			return "", "", errors.New(fmt.Sprintf("Invalid DNS domain: %s", val))
+		}
+		dnsDomainID = s[0]
+		dnsProviderType = s[1]
+	} else {
+		// No base domains defined in config
+		return "", "", nil
+	}
+
+	return dnsDomainID, dnsProviderType, nil
 }

@@ -1,4 +1,4 @@
-FROM scratch
+FROM alpine:3.12
 ARG GIT_REVISION
 LABEL "git_revision"=${GIT_REVISION}
 ADD build/bm-inventory /bm-inventory

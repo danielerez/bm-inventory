@@ -707,6 +707,28 @@ var _ = Describe("cluster", func() {
 
 			verifyApiError(reply, http.StatusInternalServerError)
 		})
+		It("get DNS domain success", func() {
+			bm.Config.BaseDNSDomains = map[string]string{
+				"dns.example.com": "abc/route53",
+			}
+			dnsDomainID, dnsProviderType, err := bm.getDNSDomain("dns.example.com")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dnsDomainID).Should(Equal("abc"))
+			Expect(dnsProviderType).Should(Equal("route53"))
+		})
+		It("get DNS domain invalid", func() {
+			bm.Config.BaseDNSDomains = map[string]string{
+				"dns.example.com": "abc",
+			}
+			_, _, err := bm.getDNSDomain("dns.example.com")
+			Expect(err).To(HaveOccurred())
+		})
+		It("get DNS domain undefined", func() {
+			dnsDomainID, dnsProviderType, err := bm.getDNSDomain("dns.example.com")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dnsDomainID).Should(Equal(""))
+			Expect(dnsProviderType).Should(Equal(""))
+		})
 	})
 	AfterEach(func() {
 		ctrl.Finish()
